@@ -27,8 +27,17 @@ void USART3_IRQHandler();
 void lcd_init();
 //void Delay_ms(__IO uint32_t nTime);
 
+#define DISPLAY_ON GPIO_SetBits(GPIOD, GPIO_Pin_5)
+#define DISPLAY_OFF GPIO_ResetBits(GPIOD, GPIO_Pin_5)
 
-
+char *range[] = {"uA", "mA", "V"};
+char *format_string[3] = {"%s%s%3.1f%s", "%s%s%3.1f%s" , "%s%s%.2f%s"};//range format string
+char *Channel_number[12] = {"1:", "2:", "3:", "4:", "5:", "6:", "7:", "8:", "9:", "10:", "11:", "12:"};
+enum SIGN_DISPLAY {NULL_, POS_, NEG_};
+char *sign_str[3] = {"", "+", "-"};
+uint8_t _ch_sign[12] = {POS_, NEG_, POS_, NEG_, POS_, NEG_, POS_, NEG_, POS_, NEG_, POS_, NEG_};
+float _current_ch_value[12] = {20.1,3.2,15.1,12.9,5.1,3.9,23.8,3.0,17.2,2.8,19.3,4.2}, _voltage_ch_value[12] = {5.12,0.31,3.22,0.21,1.23,0.51,2.33,0.14,4.82,0.67,2.45,0.71};
+char _ch_range[12] = {1,0,1,0,1,0,1,0,1,0,1,0};
 unsigned char flag_direction = 0, res_position = 0, flag_spi_send_time = 0;
 unsigned short encoder_timer = 0;
 unsigned char encoder_1_state = 0, encoder_1_pstate = 0; 
@@ -64,10 +73,23 @@ uint16_t cs_pin[3] = {GPIO_Pin_15, GPIO_Pin_12, GPIO_Pin_7};
 //ADC CS 1&2 for each channel
 GPIO_TypeDef* adc_cs_port[6] = {GPIOE, GPIOB, GPIOB, GPIOD, GPIOD, GPIOC};
 uint16_t adc_cs_pin[6] = {GPIO_Pin_10, GPIO_Pin_11, GPIO_Pin_12, GPIO_Pin_11, GPIO_Pin_12, GPIO_Pin_9};
+GPIO_TypeDef* dac_ldac_port[3] = {GPIOE, GPIOD, GPIOC};
+uint16_t dac_ldac_pin[3] = {GPIO_Pin_14, GPIO_Pin_8, GPIO_Pin_6};
+GPIO_TypeDef* dac_sync_port[3] = {GPIOE, GPIOD, GPIOC};
+uint16_t dac_sync_pin[3] = {GPIO_Pin_15, GPIO_Pin_9, GPIO_Pin_7};
+GPIO_TypeDef* dac_clk_port[3] = {GPIOE, GPIOB, GPIOD};
+uint16_t dac_clk_pin[3] = {GPIO_Pin_11, GPIO_Pin_13, GPIO_Pin_13};
+GPIO_TypeDef* dac_reset_port[3] = {GPIOB, GPIOD, GPIOC};
+uint16_t dac_reset_pin[3] = {GPIO_Pin_10, GPIO_Pin_10, GPIO_Pin_8};
+GPIO_TypeDef* dac_mosi_port[3] = {GPIOE, GPIOB, GPIOD};
+uint16_t dac_mosi_pin[3] = {GPIO_Pin_12, GPIO_Pin_14, GPIO_Pin_14};
+GPIO_TypeDef* adc_miso_port[3] = {GPIOE, GPIOB, GPIOD};
+uint16_t adc_miso_pin[3] = {GPIO_Pin_13, GPIO_Pin_15, GPIO_Pin_15};
 
-uint16_t av_buf[16][20];
+uint16_t av_buf[24][20];
 uint8_t head = 0, av_count = 0, average_delay = 2;
-uint32_t  adc_av_buf[16];
+uint32_t  adc_av_buf[24];
+uint16_t adc_buf[24];
 
 
 void delay_nop(uint16_t delay_v){
@@ -99,6 +121,46 @@ void spi_custom(uint8_t cs, uint32_t dt){
     
     TIM_Cmd(TIM7, ENABLE);
 }
+void dac_spi_custom(uint8_t dac, uint32_t dt){
+/*dac - cs line number
+  dt - data to slave
+*/
+    TIM_Cmd(TIM7, DISABLE);
+    //24bit data
+    GPIO_ResetBits(dac_sync_port[dac],dac_sync_pin[dac]);
+    for(uint8_t s = 0;s<24;s++){
+        if((dt<<s)&0x800000) GPIO_SetBits(dac_mosi_port[dac], dac_mosi_pin[dac]);
+        else GPIO_ResetBits(dac_mosi_port[dac], dac_mosi_pin[dac]);
+        delay_nop(100);
+        GPIO_ResetBits(dac_clk_port[dac], dac_clk_pin[dac]);
+        delay_nop(100);
+
+        GPIO_SetBits(dac_clk_port[dac], dac_clk_pin[dac]);
+        //delay_nop(100);
+  
+    }
+    GPIO_ResetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
+    delay_nop(100);
+    
+    GPIO_SetBits(dac_sync_port[dac],dac_sync_pin[dac]);
+    GPIO_SetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
+    TIM_Cmd(TIM7, ENABLE);
+}
+
+void dac_init(){
+  for(uint8_t dac = 0; dac <3;dac++){
+    GPIO_SetBits(dac_reset_port[dac],dac_reset_pin[dac]);
+    GPIO_SetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
+
+    
+    
+  }
+    for(uint8_t adc = 0; adc<6; adc++){
+      GPIO_SetBits(adc_cs_port[adc], adc_cs_pin[adc]);
+      
+    }  
+}
+
 uint16_t adc_data_via_spi(uint8_t cs_num, uint8_t adc_ch_num){
     //dt - data into adc, di - data from adc
     TIM_Cmd(TIM7, DISABLE);  
@@ -273,8 +335,150 @@ void read_voltage_values(){
 
 
 
+void ft812_init(char *str1, char *str2){
+    //wHostCMD(CMD_RST_PULSE);
+    
+    wHostCMD(CMD_CLKEXT);
+    wHostCMD(CMD_ACTIVE);
+    
+    while(regIdValue != 0x7C){   
+        regIdValue = rReg8(REG_ID);
+    }
+    
+    wReg16(REG_HCYCLE, 408);
+    wReg16(REG_HOFFSET, 70);
+    wReg16(REG_HSYNC0, 0);
+    wReg16(REG_HSYNC1, 10);
+    wReg16(REG_VCYCLE, 263);
+    wReg16(REG_VOFFSET, 13);
+    wReg16(REG_VSYNC0, 0);
+    wReg16(REG_VSYNC1, 2);
+    wReg8(REG_SWIZZLE, 2);
+    wReg8(REG_PCLK_POL, 1);
+    wReg8(REG_CSPREAD, 0);
+    wReg16(REG_HSIZE, 320);
+    wReg16(REG_VSIZE, 240);
+    
+    //wReg8(REG_TOUCH_MODE, FT8_TMODE_CONTINUOUS);	/* enable touch */
+    //wReg16(REG_TOUCH_RZTHRESH, 1200); /* eliminate any false touches */
+    
+    //wReg32(RAM_DL + 0, CLEAR_COLOR_RGB(0x00,0x00,0x00));//AFE313  //C5E17A
+    //wReg32(RAM_DL + 4, CLEAR(1,1,1));
+    //wReg32(RAM_DL + 8, 0x00000000);       
+    //wReg8(REG_DLSWAP, 2);
+       
+    wReg8(REG_GPIO, 0x80);
+    wReg8(REG_PCLK, 6); 
+    
+    wReg8(REG_ROTATE, 0); 
+    //Data32 = rReg32(REG_FREQUENCY);
+    wReg8(REG_PWM_DUTY, 80);
 
+  FT8_start_cmd_burst();
+  FT8_cmd_dl(CMD_DLSTART);
+  FT8_cmd_dl(DL_CLEAR_RGB | 0x000000);
+  FT8_cmd_dl(DL_CLEAR | CLR_COL | CLR_STN | CLR_TAG);
+  
+  FT8_cmd_dl(DL_COLOR_RGB | 0xffffff);
+  //FT8_cmd_text(160, 20, 24, 512, "Initialization");
+  FT8_cmd_text(160, 20, 24, 512, str1);
+  //FT8_cmd_text(160, 50, 21, 512, "Please wait");
+  FT8_cmd_text(160, 50, 21, 512, str2);
+  FT8_cmd_spinner(160, 150, 0, 0);
+   
+  FT8_cmd_dl(DL_DISPLAY);
+  FT8_cmd_dl(CMD_SWAP);
+  FT8_end_cmd_burst(); /* stop writing to the cmd-fifo */
+  FtCmdStart();      
+     
+}
 
+void ft812_12ch_disp(){
+    
+    uint8_t ch_number = 0;
+      
+    FT8_start_cmd_burst();
+    FT8_cmd_dl(CMD_DLSTART); /* start the display list */
+    FT8_cmd_dl(DL_CLEAR_RGB | 0x000000);
+    FT8_cmd_dl(DL_CLEAR | CLR_COL | CLR_STN | CLR_TAG); 
+    
+    FT8_cmd_dl(DL_COLOR_RGB | GREY_COLOR);
+    FT8_cmd_rect(0, 45, 320, 75, 1);
+    FT8_cmd_rect(0, 105, 320, 135, 1);
+    FT8_cmd_rect(0, 165, 320, 195, 1);
+    FT8_cmd_rect(0, 225, 320, 240, 1);
+    FT8_cmd_dl(DL_COLOR_RGB | SKY_BLUE_COLOR);
+    //horizontal lines
+    
+    FT8_cmd_line(0,45, 320, 45, 2);
+    FT8_cmd_line(0,75, 320, 75, 2);
+    FT8_cmd_line(0,105, 320, 105, 2);
+    FT8_cmd_line(0,135, 320, 135, 2);
+    FT8_cmd_line(0,165, 320, 165, 2);
+    FT8_cmd_line(0,195, 320, 195, 2);
+    FT8_cmd_line(0,225, 320, 225, 2);
+    //vertical lines
+    FT8_cmd_line(158,47, 158, 223, 2);
+    
+    
+    //FT8_cmd_line(200,47, 200, 240, 2);
+    //Title
+    FT8_cmd_text(159, 5, 28, 512, "Voltage SRC");
+    //display each channel
+    char ch_value_str[11], ch_value_str_current[11];
+    ch_number = 0;
+    FT8_cmd_dl(DL_COLOR_RGB | BLACK_COLOR);
+    for(uint8_t inc = 0; inc < 12; inc++){
+        char* ex_str;
+        ex_str = "";
+        sprintf (ch_value_str, "%s%s%.2f%s", sign_str[_ch_sign[inc]], ex_str, _voltage_ch_value[inc], "V");//range[_ch_range[inc]]);
+        sprintf (ch_value_str_current, "%s%s%3.1f%s", sign_str[_ch_sign[inc]], ex_str, _current_ch_value[inc], range[_ch_range[inc]]);
+        if(!(inc%2)){
+            FT8_cmd_text(0, 50 + (ch_number*30), 22, 0, Channel_number[inc]);
+            FT8_cmd_text(27, 50 + (ch_number*30), 22, 0, ch_value_str);        
+            FT8_cmd_text(90, 50 + (ch_number*30), 22, 0, ch_value_str_current);  
+        }
+        else {
+            FT8_cmd_text(165, 50 + (ch_number*30), 22, 0, Channel_number[inc]);
+            FT8_cmd_text(192, 50 + (ch_number*30), 22, 0, ch_value_str);        
+            FT8_cmd_text(255, 50 + (ch_number*30), 22, 0, ch_value_str_current); 
+            
+            if(ch_number%2) FT8_cmd_dl(DL_COLOR_RGB | BLACK_COLOR);
+            else FT8_cmd_dl(DL_COLOR_RGB | SKY_BLUE_COLOR);
+            
+            ch_number++;
+            
+        }
+        
+
+        
+        
+    }//for 5ch_list
+    FT8_cmd_dl(DL_DISPLAY);	/* instruct the graphics processor to show the list */
+    FT8_cmd_dl(CMD_SWAP); /* make this list active */
+
+    FT8_end_cmd_burst(); /* stop writing to the cmd-fifo */
+    FtCmdStart();
+
+}
+
+void conv_12ch_data(uint16_t *adc_data){
+  float temp_data[24];
+  
+  for(uint8_t adc_i = 0; adc_i < 6; adc_i++){
+    temp_data[4*adc_i] = 3.3*((float)adc_data[4*adc_i]/4095);//uA
+    temp_data[4*adc_i+1] = 1.65*((float)adc_data[4*adc_i+1]/4095);//V
+    temp_data[4*adc_i+2] = 33*((float)adc_data[4*adc_i+2]/4095);//mA
+    temp_data[4*adc_i+3] = 6.6*((float)adc_data[4*adc_i+3]/4095);//V
+    
+    _current_ch_value[2*adc_i] = temp_data[4*adc_i+2];
+    _current_ch_value[2*adc_i + 1] = temp_data[4*adc_i];
+    _voltage_ch_value[2*adc_i] = temp_data[4*adc_i+3];
+    _voltage_ch_value[2*adc_i + 1] = temp_data[4*adc_i+1];
+  }
+  
+  
+}
 
 void disp_8ch_formated(uint16_t *adc_data){
 
@@ -315,20 +519,33 @@ int main(void)
 
   for(i=0;i<1000000;i++);
   system_init();
-  //adc_dma_init();
-  //for(i=0;i<100000;i++);
-  //read_voltage_values();
-  DAC_RESET_OFF;
+  DISPLAY_OFF;
+  for(i=0;i<10000;i++);
+  DISPLAY_ON;
+  ft812_init("Hello!","VaultHunter");
+  for(i=0;i<10000000;i++);  
+  //DAC_RESET_OFF;
+  
+  dac_init();
+  dac_spi_custom(1, 0x3ff3c0);
+  dac_spi_custom(0, 0x3ff3c0);
+  
+  dac_spi_custom(2, 0x3ff3c0);  
+  
   TIM_Cmd(TIM7, ENABLE);
 
-  DAC_LDAC_HIGH;  
-  spi_custom(0, 0x3f73c0);
-  DAC_LDAC_LOW;
-  for(uint8_t asm_delay = 0; asm_delay < 255; asm_delay++);
-  DAC_LDAC_HIGH; 
+  //DAC_LDAC_HIGH;  
+  //spi_custom(0, 0x3ff3c0);
+  //DAC_LDAC_LOW;
+  
+
+  //for(uint8_t asm_delay = 0; asm_delay < 255; asm_delay++);
+  //DAC_LDAC_HIGH; 
       
   for(;;)
   {   
+    
+    
     /*
     if(average_delay == 0){
         av_buf[head++] = adc_buf[1];
@@ -414,22 +631,25 @@ int main(void)
         
         //disp_8ch_formated(voltage_source_data);
         
-        adc_buf[0] = adc_data_via_spi(0, 0);
-        adc_buf[0] = adc_data_via_spi(0, 0);
-        adc_buf[1] = adc_data_via_spi(0, 1);
-        adc_buf[1] = adc_data_via_spi(0, 1);
-        adc_buf[2] = adc_data_via_spi(0, 2);
-        adc_buf[2] = adc_data_via_spi(0, 2);
-        adc_buf[3] = adc_data_via_spi(0, 3);
-        adc_buf[3] = adc_data_via_spi(0, 3);
-        adc_data_via_spi(1, 0);
-        adc_buf[4] = adc_data_via_spi(1, 0);
-        adc_data_via_spi(1, 1);
-        adc_buf[5] = adc_data_via_spi(1, 1);
-        adc_data_via_spi(1, 2);
-        adc_buf[6] = adc_data_via_spi(1, 2);
-        adc_data_via_spi(1, 3);
-        adc_buf[7] = adc_data_via_spi(1, 3);
+        //adc_buf[0] = adc_data_via_spi(0, 0);
+        adc_buf[0] = adc_data_via_spi(0, 1);
+        //adc_buf[1] = adc_data_via_spi(0, 1);
+        adc_buf[1] = adc_data_via_spi(0, 2);
+        //adc_buf[2] = adc_data_via_spi(0, 2);
+        adc_buf[2] = adc_data_via_spi(0, 3);
+        //adc_buf[3] = adc_data_via_spi(0, 3);
+        adc_buf[3] = adc_data_via_spi(0, 0);
+        //adc_data_via_spi(1, 0);
+        adc_buf[4] = adc_data_via_spi(1, 1);
+        //adc_data_via_spi(1, 1);
+        adc_buf[5] = adc_data_via_spi(1, 2);
+        //adc_data_via_spi(1, 2);
+        adc_buf[6] = adc_data_via_spi(1, 3);
+        //adc_data_via_spi(1, 3);
+        adc_buf[7] = adc_data_via_spi(1, 0);
+        
+        conv_12ch_data(adc_buf); 
+        ft812_12ch_disp();
         delay_c = 500;
       } 
     
@@ -507,12 +727,13 @@ void system_init(void)
   GPIO.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_5;
   GPIO_Init(GPIOC, &GPIO);
 
+
   //CHANNEL 1 (4x OUTPUT)
   //CS1 CLK MOSI LDAC SYNC
   GPIO.GPIO_Mode = GPIO_Mode_OUT;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
-  GPIO.GPIO_PuPd = GPIO_PuPd_UP;
+  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
   GPIO.GPIO_Pin = GPIO_Pin_10 | GPIO_Pin_11 | GPIO_Pin_12 | GPIO_Pin_14 | GPIO_Pin_15;
   GPIO_Init(GPIOE, &GPIO);
   //RESET CS2
@@ -525,7 +746,46 @@ void system_init(void)
   GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
   GPIO.GPIO_Pin = GPIO_Pin_13;
   GPIO_Init(GPIOE, &GPIO);  
- 
+   
+  //CHANNEL 2 (4x OUTPUT)
+  //LDAC SYNC RESET CS2
+  GPIO.GPIO_Mode = GPIO_Mode_OUT;
+  GPIO.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO.GPIO_OType = GPIO_OType_PP;
+  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_Pin = GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11;
+  GPIO_Init(GPIOD, &GPIO);
+  //CS1 CLK DOUT
+  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
+  GPIO_Init(GPIOB, &GPIO);
+  //MISO
+  GPIO.GPIO_Mode = GPIO_Mode_IN;
+  GPIO.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO.GPIO_OType = GPIO_OType_PP;
+  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_Pin = GPIO_Pin_14;
+  GPIO_Init(GPIOB, &GPIO);  
+  
+  //CHANNEL 3 (4x OUTPUT)
+  //LDAC SYNC RESET CS2
+  GPIO.GPIO_Mode = GPIO_Mode_OUT;
+  GPIO.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO.GPIO_OType = GPIO_OType_PP;
+  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7 | GPIO_Pin_8 | GPIO_Pin_9;
+  GPIO_Init(GPIOC, &GPIO);
+  //CS1 CLK DOUT
+  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
+  GPIO_Init(GPIOD, &GPIO);
+  //MISO
+  GPIO.GPIO_Mode = GPIO_Mode_IN;
+  GPIO.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO.GPIO_OType = GPIO_OType_PP;
+  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_Pin = GPIO_Pin_14;
+  GPIO_Init(GPIOD, &GPIO);  
+    
+  
 //Display ft812 based init 
   
   //SPI1 SCK MISO MOSI
@@ -627,6 +887,11 @@ void TIM7_IRQHandler()
  encoder_timer++;
  if(encoder_timer == 1){
   encoder_timer = 0;
+  
+  
+
+  
+  
   encoder_1_value = GPIOA->IDR;
  
   if(((encoder_1_value & 0x03)) == 3) encoder_1_state = 0;
@@ -638,7 +903,6 @@ void TIM7_IRQHandler()
     if((encoder_1_state == 2) && (encoder_1_pstate == 3)){
       if(encoder_1_counter < 1023) encoder_1_counter++;
       if(temp_voltage_value[0] < MAX_COUNT_DRAIN) temp_voltage_value[0]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
       spi_cs_buf[spi_head++] = 0;
       spi_queue++;
@@ -647,7 +911,6 @@ void TIM7_IRQHandler()
     if((encoder_1_state == 1) && (encoder_1_pstate == 3)){
       if(encoder_1_counter != 0) encoder_1_counter--;
       if(temp_voltage_value[0] != 0) temp_voltage_value[0]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
       spi_cs_buf[spi_head++] = 0;
       spi_queue++;
@@ -667,7 +930,6 @@ void TIM7_IRQHandler()
     if((encoder_2_state == 2) && (encoder_2_pstate == 3)){
       if(encoder_2_counter <= 1023) encoder_2_counter++;
       if(temp_voltage_value[1] < MAX_COUNT_GATE) temp_voltage_value[1]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
       spi_cs_buf[spi_head++] = 1;
       spi_queue++;
@@ -676,7 +938,6 @@ void TIM7_IRQHandler()
     if((encoder_2_state == 1) && (encoder_2_pstate == 3)){
       if(encoder_2_counter > 6) encoder_2_counter--;
       if(temp_voltage_value[1] != 0) temp_voltage_value[1]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
       spi_cs_buf[spi_head++] = 1;
       spi_queue++;
@@ -697,7 +958,6 @@ void TIM7_IRQHandler()
     if((encoder_3_state == 2) && (encoder_3_pstate == 3)){
       if(encoder_3_counter < 1023) encoder_3_counter++;
       if(temp_voltage_value[2] < MAX_COUNT_DRAIN) temp_voltage_value[2]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
       spi_cs_buf[spi_head++] = 2;
       spi_queue++;
@@ -706,7 +966,6 @@ void TIM7_IRQHandler()
     if((encoder_3_state == 1) && (encoder_3_pstate == 3)){
       if(encoder_3_counter != 0) encoder_3_counter--;
       if(temp_voltage_value[2] != 0) temp_voltage_value[2]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
       spi_cs_buf[spi_head++] = 2;
       spi_queue++;
@@ -725,7 +984,6 @@ void TIM7_IRQHandler()
     if((encoder_4_state == 2) && (encoder_4_pstate == 3)){
       if(encoder_4_counter < 1023) encoder_4_counter++;
       if(temp_voltage_value[3] < MAX_COUNT_GATE) temp_voltage_value[3]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
       spi_cs_buf[spi_head++] = 3;
       spi_queue++;
@@ -734,7 +992,6 @@ void TIM7_IRQHandler()
     if((encoder_4_state == 1) && (encoder_4_pstate == 3)){
       if(encoder_4_counter > 6) encoder_4_counter--;
       if(temp_voltage_value[3] != 0) temp_voltage_value[3]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
       spi_cs_buf[spi_head++] = 3;
       spi_queue++;
@@ -753,7 +1010,6 @@ void TIM7_IRQHandler()
     if((encoder_5_state == 2) && (encoder_5_pstate == 3)){
       if(encoder_5_counter < 1023) encoder_5_counter++;
       if(temp_voltage_value[4] < MAX_COUNT_DRAIN) temp_voltage_value[4]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
       spi_cs_buf[spi_head++] = 4;
       spi_queue++;
@@ -762,7 +1018,6 @@ void TIM7_IRQHandler()
     if((encoder_5_state == 1) && (encoder_5_pstate == 3)){
       if(encoder_5_counter != 0) encoder_5_counter--;
       if(temp_voltage_value[4] != 0) temp_voltage_value[4]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
       spi_cs_buf[spi_head++] = 4;
       spi_queue++;
@@ -781,7 +1036,6 @@ void TIM7_IRQHandler()
     if((encoder_6_state == 2) && (encoder_6_pstate == 3)){
       if(encoder_6_counter <= 1023) encoder_6_counter++;
       if(temp_voltage_value[5] < MAX_COUNT_GATE) temp_voltage_value[5]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
       spi_cs_buf[spi_head++] = 5;
       spi_queue++;
@@ -790,7 +1044,6 @@ void TIM7_IRQHandler()
     if((encoder_6_state == 1) && (encoder_6_pstate == 3)){
       if(encoder_6_counter > 6) encoder_6_counter--;
       if(temp_voltage_value[5] != 0) temp_voltage_value[5]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
       spi_cs_buf[spi_head++] = 5;
       spi_queue++;
@@ -809,7 +1062,6 @@ void TIM7_IRQHandler()
     if((encoder_7_state == 2) && (encoder_7_pstate == 3)){
       if(encoder_7_counter < 1023) encoder_7_counter++;
       if(temp_voltage_value[6] < MAX_COUNT_DRAIN) temp_voltage_value[6]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
       spi_cs_buf[spi_head++] = 6;
       spi_queue++;
@@ -818,7 +1070,6 @@ void TIM7_IRQHandler()
     if((encoder_7_state == 1) && (encoder_7_pstate == 3)){
       if(encoder_7_counter != 0) encoder_7_counter--;
       if(temp_voltage_value[6] != 0) temp_voltage_value[6]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
       spi_cs_buf[spi_head++] = 6;
       spi_queue++;
@@ -837,7 +1088,6 @@ void TIM7_IRQHandler()
     if((encoder_8_state == 2) && (encoder_8_pstate == 3)){
       if(encoder_8_counter < 1023) encoder_8_counter++;
       if(temp_voltage_value[7] < MAX_COUNT_GATE) temp_voltage_value[7]++;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
       spi_cs_buf[spi_head++] = 7;
       spi_queue++;
@@ -846,7 +1096,6 @@ void TIM7_IRQHandler()
     if((encoder_8_state == 1) && (encoder_8_pstate == 3)){
       if(encoder_8_counter > 6) encoder_8_counter--;
       if(temp_voltage_value[7] != 0) temp_voltage_value[7]--;
-      //flag_spi_send_time = 1;
       spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
       spi_cs_buf[spi_head++] = 7;
       spi_queue++;
@@ -956,6 +1205,7 @@ void TIM7_IRQHandler()
     }
     
   }//new state   
+  
   
   encoder_1_pstate = encoder_1_state;
   encoder_2_pstate = encoder_2_state;
