@@ -61,7 +61,7 @@ uint16_t encoder_5_value = 0, encoder_6_value = 0, encoder_7_value = 0, encoder_
 uint16_t encoder_9_value = 0, encoder_10_value = 0, encoder_11_value = 0, encoder_12_value = 0;
 uint16_t delay_c = 0;
 
-uint8_t spi_data_buf[100];
+uint16_t spi_data_buf[100];
 uint8_t spi_cs_buf[100];
 uint16_t spi_head = 0, spi_tail = 0;
 uint8_t spi_queue = 0;
@@ -121,42 +121,39 @@ void spi_custom(uint8_t cs, uint32_t dt){
     
     TIM_Cmd(TIM7, ENABLE);
 }
-void dac_spi_custom(uint8_t dac, uint32_t dt){
+void dac_spi_custom(uint8_t dac_num, uint32_t dt){
 /*dac - cs line number
   dt - data to slave
 */
     TIM_Cmd(TIM7, DISABLE);
     //24bit data
-    GPIO_ResetBits(dac_sync_port[dac],dac_sync_pin[dac]);
+    GPIO_ResetBits(dac_sync_port[dac_num],dac_sync_pin[dac_num]);
     for(uint8_t s = 0;s<24;s++){
-        if((dt<<s)&0x800000) GPIO_SetBits(dac_mosi_port[dac], dac_mosi_pin[dac]);
-        else GPIO_ResetBits(dac_mosi_port[dac], dac_mosi_pin[dac]);
-        delay_nop(100);
-        GPIO_ResetBits(dac_clk_port[dac], dac_clk_pin[dac]);
-        delay_nop(100);
+        if((dt<<s)&0x800000) GPIO_SetBits(dac_mosi_port[dac_num], dac_mosi_pin[dac_num]);
+        else GPIO_ResetBits(dac_mosi_port[dac_num], dac_mosi_pin[dac_num]);
+        delay_nop(200);
+        GPIO_ResetBits(dac_clk_port[dac_num], dac_clk_pin[dac_num]);
+        delay_nop(200);
 
-        GPIO_SetBits(dac_clk_port[dac], dac_clk_pin[dac]);
-        //delay_nop(100);
-  
+        GPIO_SetBits(dac_clk_port[dac_num], dac_clk_pin[dac_num]);
+        //delay_nop(100);  
     }
-    GPIO_ResetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
-    delay_nop(100);
+    GPIO_ResetBits(dac_ldac_port[dac_num],dac_ldac_pin[dac_num]);
+    delay_nop(200);
     
-    GPIO_SetBits(dac_sync_port[dac],dac_sync_pin[dac]);
-    GPIO_SetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
+    GPIO_SetBits(dac_sync_port[dac_num],dac_sync_pin[dac_num]);
+    //GPIO_SetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
     TIM_Cmd(TIM7, ENABLE);
 }
 
 void dac_init(){
-  for(uint8_t dac = 0; dac <3;dac++){
-    GPIO_SetBits(dac_reset_port[dac],dac_reset_pin[dac]);
-    GPIO_SetBits(dac_ldac_port[dac],dac_ldac_pin[dac]);
-
-    
-    
+  for(uint8_t i = 0; i <3;i++){
+    GPIO_SetBits(dac_reset_port[i],dac_reset_pin[i]);
+    GPIO_SetBits(dac_ldac_port[i],dac_ldac_pin[i]);
+ 
   }
-    for(uint8_t adc = 0; adc<6; adc++){
-      GPIO_SetBits(adc_cs_port[adc], adc_cs_pin[adc]);
+    for(uint8_t i = 0; i<6; i++){
+      GPIO_SetBits(adc_cs_port[i], adc_cs_pin[i]);
       
     }  
 }
@@ -170,14 +167,19 @@ uint16_t adc_data_via_spi(uint8_t cs_num, uint8_t adc_ch_num){
     else if(adc_ch_num == 2) dt = 0x1000;
     else if(adc_ch_num == 3) dt = 0x1800;
     else dt = 0x00;
+    uint8_t dac_line = 0;
+    if((cs_num == 0) || (cs_num == 1)) dac_line = 0;
+    if((cs_num == 2) || (cs_num == 3)) dac_line = 1;
+    if((cs_num == 4) || (cs_num == 5)) dac_line = 2;
+    
     GPIO_ResetBits(adc_cs_port[cs_num], adc_cs_pin[cs_num]);
     for(uint8_t s = 0; s<16; s++){
-        if((dt<<s)&0x8000) DATA_HIGH;
-        else DATA_LOW;  
-        CLK_LOW;
+        if((dt<<s)&0x8000) GPIO_SetBits(dac_mosi_port[dac_line], dac_mosi_pin[dac_line]);
+        else GPIO_ResetBits(dac_mosi_port[dac_line], dac_mosi_pin[dac_line]);;  
+        GPIO_ResetBits(dac_clk_port[dac_line], dac_clk_pin[dac_line]);
         delay_nop(1000);
-        di = (di << 1) | (DATA_IN & 0x01);
-        CLK_HIGH;
+        di = (di << 1) | (GPIO_ReadInputDataBit(adc_miso_port[dac_line], adc_miso_pin[dac_line]) & 0x01);
+        GPIO_SetBits(dac_clk_port[dac_line], dac_clk_pin[dac_line]);
         delay_nop(1000); 
     }
     delay_nop(100);
@@ -189,7 +191,37 @@ uint16_t adc_data_via_spi(uint8_t cs_num, uint8_t adc_ch_num){
     return (0x0fff & di);    
 }
 
-
+void adc_fetch_data(){
+   
+        adc_buf[0] = adc_data_via_spi(0, 1);
+        adc_buf[4] = adc_data_via_spi(1, 1);
+        adc_buf[8] = adc_data_via_spi(2, 1);
+        adc_buf[12] = adc_data_via_spi(3, 1);
+        adc_buf[16] = adc_data_via_spi(4, 1);
+        adc_buf[20] = adc_data_via_spi(5, 1);
+           
+        adc_buf[1] = adc_data_via_spi(0, 2);
+        adc_buf[5] = adc_data_via_spi(1, 2);
+        adc_buf[9] = adc_data_via_spi(2, 2);
+        adc_buf[13] = adc_data_via_spi(3, 2); 
+        adc_buf[17] = adc_data_via_spi(4, 2);
+        adc_buf[21] = adc_data_via_spi(5, 2);
+ 
+        adc_buf[2] = adc_data_via_spi(0, 3);
+        adc_buf[6] = adc_data_via_spi(1, 3);
+        adc_buf[10] = adc_data_via_spi(2, 3);
+        adc_buf[14] = adc_data_via_spi(3, 3);
+        adc_buf[18] = adc_data_via_spi(4, 3);
+        adc_buf[22] = adc_data_via_spi(5, 3);
+        
+        adc_buf[3] = adc_data_via_spi(0, 0);
+        adc_buf[7] = adc_data_via_spi(1, 0);
+        adc_buf[11] = adc_data_via_spi(2, 0); 
+        adc_buf[15] = adc_data_via_spi(3, 0);
+        adc_buf[19] = adc_data_via_spi(4, 0);
+        adc_buf[23] = adc_data_via_spi(5, 0);        
+              
+}
 void adc_voltage_monitor_init(){
  
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
@@ -527,20 +559,13 @@ int main(void)
   //DAC_RESET_OFF;
   
   dac_init();
-  dac_spi_custom(1, 0x3ff3c0);
-  dac_spi_custom(0, 0x3ff3c0);
+  dac_spi_custom(1, 0x3fffc0);
+  dac_spi_custom(0, 0x3fffc0);
   
-  dac_spi_custom(2, 0x3ff3c0);  
-  
+  dac_spi_custom(2, 0x3fffc0);  
+
   TIM_Cmd(TIM7, ENABLE);
 
-  //DAC_LDAC_HIGH;  
-  //spi_custom(0, 0x3ff3c0);
-  //DAC_LDAC_LOW;
-  
-
-  //for(uint8_t asm_delay = 0; asm_delay < 255; asm_delay++);
-  //DAC_LDAC_HIGH; 
       
   for(;;)
   {   
@@ -565,7 +590,7 @@ int main(void)
 //save current values in flash memory of mcu    
     if(butn1_cnt != 0){
         butn1_cnt--;
-        //GPIO_SetBits(GPIOE, GPIO_Pin_3);
+        //GPIO_SetBits(GPIOE, GPIO_Pin_7);
         led_blink = 500;
         
         //save_voltage_values(temp_voltage_value);
@@ -629,25 +654,7 @@ int main(void)
         voltage_source_data[12] = adc_av_buf[0];
         voltage_source_data[13] = adc_av_buf[1];        
         
-        //disp_8ch_formated(voltage_source_data);
-        
-        //adc_buf[0] = adc_data_via_spi(0, 0);
-        adc_buf[0] = adc_data_via_spi(0, 1);
-        //adc_buf[1] = adc_data_via_spi(0, 1);
-        adc_buf[1] = adc_data_via_spi(0, 2);
-        //adc_buf[2] = adc_data_via_spi(0, 2);
-        adc_buf[2] = adc_data_via_spi(0, 3);
-        //adc_buf[3] = adc_data_via_spi(0, 3);
-        adc_buf[3] = adc_data_via_spi(0, 0);
-        //adc_data_via_spi(1, 0);
-        adc_buf[4] = adc_data_via_spi(1, 1);
-        //adc_data_via_spi(1, 1);
-        adc_buf[5] = adc_data_via_spi(1, 2);
-        //adc_data_via_spi(1, 2);
-        adc_buf[6] = adc_data_via_spi(1, 3);
-        //adc_data_via_spi(1, 3);
-        adc_buf[7] = adc_data_via_spi(1, 0);
-        
+        adc_fetch_data();
         conv_12ch_data(adc_buf); 
         ft812_12ch_disp();
         delay_c = 500;
@@ -655,8 +662,25 @@ int main(void)
     
       if(spi_queue != 0){
             spi_queue--;
+            //dac_spi_custom(1, 0x3ff3c0);
             //spi_via_ring_buf(spi_cs_buf[spi_tail], spi_data_buf[spi_tail]);
             //spi_custom(spi_cs_buf[spi_tail], spi_data_buf[spi_tail]);
+            
+            if(spi_cs_buf[spi_tail] == 0) dac_spi_custom(0, (0x310000 |  (spi_data_buf[spi_tail]<<6))); 
+            if(spi_cs_buf[spi_tail] == 1) dac_spi_custom(0, (0x320000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 2) dac_spi_custom(0, (0x340000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 3) dac_spi_custom(0, (0x380000 |  (spi_data_buf[spi_tail]<<6)));
+            
+            if(spi_cs_buf[spi_tail] == 4) dac_spi_custom(1, (0x310000 |  (spi_data_buf[spi_tail]<<6))); 
+            if(spi_cs_buf[spi_tail] == 5) dac_spi_custom(1, (0x320000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 6) dac_spi_custom(1, (0x340000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 7) dac_spi_custom(1, (0x380000 |  (spi_data_buf[spi_tail]<<6)));
+
+            if(spi_cs_buf[spi_tail] == 8) dac_spi_custom(2, (0x310000 |  (spi_data_buf[spi_tail]<<6))); 
+            if(spi_cs_buf[spi_tail] == 9) dac_spi_custom(2, (0x320000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 10) dac_spi_custom(2, (0x340000 |  (spi_data_buf[spi_tail]<<6)));
+            if(spi_cs_buf[spi_tail] == 11) dac_spi_custom(2, (0x380000 |  (spi_data_buf[spi_tail]<<6)));            
+                       
             spi_tail++;
             if(spi_tail >= 50) spi_tail = 0;             
       }
@@ -733,7 +757,7 @@ void system_init(void)
   GPIO.GPIO_Mode = GPIO_Mode_OUT;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
-  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_PuPd = GPIO_PuPd_UP;
   GPIO.GPIO_Pin = GPIO_Pin_10 | GPIO_Pin_11 | GPIO_Pin_12 | GPIO_Pin_14 | GPIO_Pin_15;
   GPIO_Init(GPIOE, &GPIO);
   //RESET CS2
@@ -752,18 +776,18 @@ void system_init(void)
   GPIO.GPIO_Mode = GPIO_Mode_OUT;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
-  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_PuPd = GPIO_PuPd_UP;
   GPIO.GPIO_Pin = GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11;
   GPIO_Init(GPIOD, &GPIO);
   //CS1 CLK DOUT
-  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
+  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_14;
   GPIO_Init(GPIOB, &GPIO);
   //MISO
   GPIO.GPIO_Mode = GPIO_Mode_IN;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
   GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
-  GPIO.GPIO_Pin = GPIO_Pin_14;
+  GPIO.GPIO_Pin = GPIO_Pin_15;
   GPIO_Init(GPIOB, &GPIO);  
   
   //CHANNEL 3 (4x OUTPUT)
@@ -771,18 +795,18 @@ void system_init(void)
   GPIO.GPIO_Mode = GPIO_Mode_OUT;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
-  GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
+  GPIO.GPIO_PuPd = GPIO_PuPd_UP;
   GPIO.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7 | GPIO_Pin_8 | GPIO_Pin_9;
   GPIO_Init(GPIOC, &GPIO);
   //CS1 CLK DOUT
-  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
+  GPIO.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_14;
   GPIO_Init(GPIOD, &GPIO);
   //MISO
   GPIO.GPIO_Mode = GPIO_Mode_IN;
   GPIO.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO.GPIO_OType = GPIO_OType_PP;
   GPIO.GPIO_PuPd = GPIO_PuPd_DOWN;
-  GPIO.GPIO_Pin = GPIO_Pin_14;
+  GPIO.GPIO_Pin = GPIO_Pin_15;
   GPIO_Init(GPIOD, &GPIO);  
     
   
@@ -901,16 +925,16 @@ void TIM7_IRQHandler()
   
   if(encoder_1_pstate != encoder_1_state){
     if((encoder_1_state == 2) && (encoder_1_pstate == 3)){
-      if(encoder_1_counter < 1023) encoder_1_counter++;
-      if(temp_voltage_value[0] < MAX_COUNT_DRAIN) temp_voltage_value[0]++;
+      if(encoder_1_counter < 1023) encoder_1_counter += ENCODER_STEP;
+      if(temp_voltage_value[0] < MAX_COUNT_DRAIN) temp_voltage_value[0] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
       spi_cs_buf[spi_head++] = 0;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_1_state == 1) && (encoder_1_pstate == 3)){
-      if(encoder_1_counter != 0) encoder_1_counter--;
-      if(temp_voltage_value[0] != 0) temp_voltage_value[0]--;
+      if(encoder_1_counter != 0) encoder_1_counter -= ENCODER_STEP;
+      if(temp_voltage_value[0] != 0) temp_voltage_value[0] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
       spi_cs_buf[spi_head++] = 0;
       spi_queue++;
@@ -928,16 +952,16 @@ void TIM7_IRQHandler()
   
   if(encoder_2_pstate != encoder_2_state){
     if((encoder_2_state == 2) && (encoder_2_pstate == 3)){
-      if(encoder_2_counter <= 1023) encoder_2_counter++;
-      if(temp_voltage_value[1] < MAX_COUNT_GATE) temp_voltage_value[1]++;
+      if(encoder_2_counter <= 1023) encoder_2_counter += ENCODER_STEP;
+      if(temp_voltage_value[1] < MAX_COUNT_GATE) temp_voltage_value[1] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
       spi_cs_buf[spi_head++] = 1;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_2_state == 1) && (encoder_2_pstate == 3)){
-      if(encoder_2_counter > 6) encoder_2_counter--;
-      if(temp_voltage_value[1] != 0) temp_voltage_value[1]--;
+      if(encoder_2_counter > 6) encoder_2_counter -= ENCODER_STEP;
+      if(temp_voltage_value[1] != 0) temp_voltage_value[1] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
       spi_cs_buf[spi_head++] = 1;
       spi_queue++;
@@ -947,7 +971,7 @@ void TIM7_IRQHandler()
   }//new state
 
 
-  encoder_3_value = GPIOA->IDR;//((encoders_port>>10)&0x03);
+  encoder_3_value = GPIOA->IDR;
   if(((encoder_3_value & 0x30)>>4) == 3) encoder_3_state = 0;
   if(((encoder_3_value & 0x30)>>4) == 2) encoder_3_state = 1;
   if(((encoder_3_value & 0x30)>>4) == 1) encoder_3_state = 2;
@@ -956,16 +980,16 @@ void TIM7_IRQHandler()
   
   if(encoder_3_pstate != encoder_3_state){
     if((encoder_3_state == 2) && (encoder_3_pstate == 3)){
-      if(encoder_3_counter < 1023) encoder_3_counter++;
-      if(temp_voltage_value[2] < MAX_COUNT_DRAIN) temp_voltage_value[2]++;
+      if(encoder_3_counter < 1023) encoder_3_counter += ENCODER_STEP;
+      if(temp_voltage_value[2] < MAX_COUNT_DRAIN) temp_voltage_value[2] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
       spi_cs_buf[spi_head++] = 2;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_3_state == 1) && (encoder_3_pstate == 3)){
-      if(encoder_3_counter != 0) encoder_3_counter--;
-      if(temp_voltage_value[2] != 0) temp_voltage_value[2]--;
+      if(encoder_3_counter != 0) encoder_3_counter -= ENCODER_STEP;
+      if(temp_voltage_value[2] != 0) temp_voltage_value[2] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
       spi_cs_buf[spi_head++] = 2;
       spi_queue++;
@@ -982,16 +1006,16 @@ void TIM7_IRQHandler()
     
   if(encoder_4_pstate != encoder_4_state){
     if((encoder_4_state == 2) && (encoder_4_pstate == 3)){
-      if(encoder_4_counter < 1023) encoder_4_counter++;
-      if(temp_voltage_value[3] < MAX_COUNT_GATE) temp_voltage_value[3]++;
+      if(encoder_4_counter < 1023) encoder_4_counter += ENCODER_STEP;
+      if(temp_voltage_value[3] < MAX_COUNT_GATE) temp_voltage_value[3] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
       spi_cs_buf[spi_head++] = 3;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_4_state == 1) && (encoder_4_pstate == 3)){
-      if(encoder_4_counter > 6) encoder_4_counter--;
-      if(temp_voltage_value[3] != 0) temp_voltage_value[3]--;
+      if(encoder_4_counter > 6) encoder_4_counter -= ENCODER_STEP;
+      if(temp_voltage_value[3] != 0) temp_voltage_value[3] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
       spi_cs_buf[spi_head++] = 3;
       spi_queue++;
@@ -1008,16 +1032,16 @@ void TIM7_IRQHandler()
     
   if(encoder_5_pstate != encoder_5_state){
     if((encoder_5_state == 2) && (encoder_5_pstate == 3)){
-      if(encoder_5_counter < 1023) encoder_5_counter++;
-      if(temp_voltage_value[4] < MAX_COUNT_DRAIN) temp_voltage_value[4]++;
+      if(encoder_5_counter < 1023) encoder_5_counter += ENCODER_STEP;
+      if(temp_voltage_value[4] < MAX_COUNT_DRAIN) temp_voltage_value[4] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
       spi_cs_buf[spi_head++] = 4;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_5_state == 1) && (encoder_5_pstate == 3)){
-      if(encoder_5_counter != 0) encoder_5_counter--;
-      if(temp_voltage_value[4] != 0) temp_voltage_value[4]--;
+      if(encoder_5_counter != 0) encoder_5_counter -= ENCODER_STEP;
+      if(temp_voltage_value[4] != 0) temp_voltage_value[4] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
       spi_cs_buf[spi_head++] = 4;
       spi_queue++;
@@ -1026,7 +1050,7 @@ void TIM7_IRQHandler()
     
   }//new state   
 
-  encoder_6_value = GPIOE->IDR;//((encoders_port>>10)&0x03);
+  encoder_6_value = GPIOE->IDR;
   if(((encoder_6_value & 0x30)>>4) == 3) encoder_6_state = 0;
   if(((encoder_6_value & 0x30)>>4) == 2) encoder_6_state = 1;
   if(((encoder_6_value & 0x30)>>4) == 1) encoder_6_state = 2;
@@ -1034,16 +1058,16 @@ void TIM7_IRQHandler()
   
   if(encoder_6_pstate != encoder_6_state){
     if((encoder_6_state == 2) && (encoder_6_pstate == 3)){
-      if(encoder_6_counter <= 1023) encoder_6_counter++;
-      if(temp_voltage_value[5] < MAX_COUNT_GATE) temp_voltage_value[5]++;
+      if(encoder_6_counter <= 1023) encoder_6_counter += ENCODER_STEP;
+      if(temp_voltage_value[5] < MAX_COUNT_GATE) temp_voltage_value[5] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
       spi_cs_buf[spi_head++] = 5;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_6_state == 1) && (encoder_6_pstate == 3)){
-      if(encoder_6_counter > 6) encoder_6_counter--;
-      if(temp_voltage_value[5] != 0) temp_voltage_value[5]--;
+      if(encoder_6_counter > 6) encoder_6_counter -= ENCODER_STEP;
+      if(temp_voltage_value[5] != 0) temp_voltage_value[5] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
       spi_cs_buf[spi_head++] = 5;
       spi_queue++;
@@ -1052,7 +1076,7 @@ void TIM7_IRQHandler()
     
   }//new state   
 
-  encoder_7_value = GPIOE->IDR;//((encoders_port>>10)&0x03);
+  encoder_7_value = GPIOE->IDR;
   if(((encoder_7_value & 0x0C)>>2) == 3) encoder_7_state = 0;
   if(((encoder_7_value & 0x0C)>>2) == 2) encoder_7_state = 1;
   if(((encoder_7_value & 0x0C)>>2) == 1) encoder_7_state = 2;
@@ -1060,16 +1084,16 @@ void TIM7_IRQHandler()
     
   if(encoder_7_pstate != encoder_7_state){
     if((encoder_7_state == 2) && (encoder_7_pstate == 3)){
-      if(encoder_7_counter < 1023) encoder_7_counter++;
-      if(temp_voltage_value[6] < MAX_COUNT_DRAIN) temp_voltage_value[6]++;
+      if(encoder_7_counter < 1023) encoder_7_counter += ENCODER_STEP;
+      if(temp_voltage_value[6] < MAX_COUNT_DRAIN) temp_voltage_value[6] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
       spi_cs_buf[spi_head++] = 6;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_7_state == 1) && (encoder_7_pstate == 3)){
-      if(encoder_7_counter != 0) encoder_7_counter--;
-      if(temp_voltage_value[6] != 0) temp_voltage_value[6]--;
+      if(encoder_7_counter != 0) encoder_7_counter -= ENCODER_STEP;
+      if(temp_voltage_value[6] != 0) temp_voltage_value[6] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
       spi_cs_buf[spi_head++] = 6;
       spi_queue++;
@@ -1078,7 +1102,7 @@ void TIM7_IRQHandler()
     
   }//new state 
 
-  encoder_8_value = GPIOE->IDR;//((encoders_port>>10)&0x03);
+  encoder_8_value = GPIOE->IDR;
   if(((encoder_8_value & 0x03)) == 3) encoder_8_state = 0;
   if(((encoder_8_value & 0x03)) == 2) encoder_8_state = 1;
   if(((encoder_8_value & 0x03)) == 1) encoder_8_state = 2;
@@ -1086,16 +1110,16 @@ void TIM7_IRQHandler()
      
   if(encoder_8_pstate != encoder_8_state){
     if((encoder_8_state == 2) && (encoder_8_pstate == 3)){
-      if(encoder_8_counter < 1023) encoder_8_counter++;
-      if(temp_voltage_value[7] < MAX_COUNT_GATE) temp_voltage_value[7]++;
+      if(encoder_8_counter < 1023) encoder_8_counter += ENCODER_STEP;
+      if(temp_voltage_value[7] < MAX_COUNT_GATE) temp_voltage_value[7] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
       spi_cs_buf[spi_head++] = 7;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_8_state == 1) && (encoder_8_pstate == 3)){
-      if(encoder_8_counter > 6) encoder_8_counter--;
-      if(temp_voltage_value[7] != 0) temp_voltage_value[7]--;
+      if(encoder_8_counter > 6) encoder_8_counter -= ENCODER_STEP;
+      if(temp_voltage_value[7] != 0) temp_voltage_value[7] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
       spi_cs_buf[spi_head++] = 7;
       spi_queue++;
@@ -1112,16 +1136,16 @@ void TIM7_IRQHandler()
     
   if(encoder_9_pstate != encoder_9_state){
     if((encoder_9_state == 2) && (encoder_9_pstate == 3)){
-      if(encoder_9_counter < 1023) encoder_9_counter++;
-      if(temp_voltage_value[8] < MAX_COUNT_DRAIN) temp_voltage_value[8]++;
+      if(encoder_9_counter < 1023) encoder_9_counter += ENCODER_STEP;
+      if(temp_voltage_value[8] < MAX_COUNT_DRAIN) temp_voltage_value[8] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[8];//encoder_9_counter;
       spi_cs_buf[spi_head++] = 8;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_9_state == 1) && (encoder_9_pstate == 3)){
-      if(encoder_9_counter != 0) encoder_9_counter--;
-      if(temp_voltage_value[8] != 0) temp_voltage_value[8]--;
+      if(encoder_9_counter != 0) encoder_9_counter -= ENCODER_STEP;
+      if(temp_voltage_value[8] != 0) temp_voltage_value[8] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[8];//encoder_9_counter;
       spi_cs_buf[spi_head++] = 8;
       spi_queue++;
@@ -1137,16 +1161,16 @@ void TIM7_IRQHandler()
      
   if(encoder_10_pstate != encoder_10_state){
     if((encoder_10_state == 2) && (encoder_10_pstate == 3)){
-      if(encoder_10_counter < 1023) encoder_10_counter++;
-      if(temp_voltage_value[9] < MAX_COUNT_GATE) temp_voltage_value[9]++;
+      if(encoder_10_counter < 1023) encoder_10_counter += ENCODER_STEP;
+      if(temp_voltage_value[9] < MAX_COUNT_GATE) temp_voltage_value[9] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[9];//encoder_8_counter;
       spi_cs_buf[spi_head++] = 9;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_10_state == 1) && (encoder_10_pstate == 3)){
-      if(encoder_10_counter > 6) encoder_10_counter--;
-      if(temp_voltage_value[9] != 0) temp_voltage_value[9]--;
+      if(encoder_10_counter > 6) encoder_10_counter -= ENCODER_STEP;
+      if(temp_voltage_value[9] != 0) temp_voltage_value[9] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[9];//encoder_10_counter;
       spi_cs_buf[spi_head++] = 9;
       spi_queue++;
@@ -1163,16 +1187,16 @@ void TIM7_IRQHandler()
     
   if(encoder_11_pstate != encoder_11_state){
     if((encoder_11_state == 2) && (encoder_11_pstate == 3)){
-      if(encoder_11_counter < 1023) encoder_11_counter++;
-      if(temp_voltage_value[10] < MAX_COUNT_DRAIN) temp_voltage_value[10]++;
+      if(encoder_11_counter < 1023) encoder_11_counter += ENCODER_STEP;
+      if(temp_voltage_value[10] < MAX_COUNT_DRAIN) temp_voltage_value[10] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[10];//encoder_10_counter;
       spi_cs_buf[spi_head++] = 10;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_11_state == 1) && (encoder_11_pstate == 3)){
-      if(encoder_11_counter != 0) encoder_11_counter--;
-      if(temp_voltage_value[10] != 0) temp_voltage_value[10]--;
+      if(encoder_11_counter != 0) encoder_11_counter -= ENCODER_STEP;
+      if(temp_voltage_value[10] != 0) temp_voltage_value[10] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[10];//encoder_10_counter;
       spi_cs_buf[spi_head++] = 10;
       spi_queue++;
@@ -1188,16 +1212,16 @@ void TIM7_IRQHandler()
      
   if(encoder_12_pstate != encoder_12_state){
     if((encoder_12_state == 2) && (encoder_12_pstate == 3)){
-      if(encoder_12_counter < 1023) encoder_12_counter++;
-      if(temp_voltage_value[11] < MAX_COUNT_GATE) temp_voltage_value[11]++;
+      if(encoder_12_counter < 1023) encoder_12_counter += ENCODER_STEP;
+      if(temp_voltage_value[11] < MAX_COUNT_GATE) temp_voltage_value[11] += ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[11];//encoder_12_counter;
       spi_cs_buf[spi_head++] = 11;
       spi_queue++;
       if(spi_head >= 50) spi_head = 0;
     }
     if((encoder_12_state == 1) && (encoder_12_pstate == 3)){
-      if(encoder_12_counter > 6) encoder_12_counter--;
-      if(temp_voltage_value[11] != 0) temp_voltage_value[11]--;
+      if(encoder_12_counter > 6) encoder_12_counter -= ENCODER_STEP;
+      if(temp_voltage_value[11] > 6) temp_voltage_value[11] -= ENCODER_STEP;
       spi_data_buf[spi_head] = temp_voltage_value[11];//encoder_12_counter;
       spi_cs_buf[spi_head++] = 11;
       spi_queue++;
