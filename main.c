@@ -43,6 +43,9 @@ char step_size = 1;
 uint16_t saved_timer = 0;
 uint16_t advr_x_offset = 0;
 
+uint32_t display_tag = 0;
+uint8_t disp_wait_butn = 0, prev_state_dispbutn = 0, cur_state_dispbutn = 0, disp_time_cnt = 0;
+
 unsigned char flag_direction = 0, res_position = 0, flag_spi_send_time = 0;
 unsigned short encoder_timer = 0;
 unsigned char encoder_1_state = 0, encoder_1_pstate = 0; 
@@ -99,6 +102,11 @@ uint16_t adc_for_disp[24], adc_prev[24];
 uint16_t adc_offset_cal[1024];
 uint16_t adc_uA_num[6];
 uint16_t temp_data_monitor[6];
+uint8_t tag;
+uint32_t tag_x, tag_y;
+uint16_t disp_butn_cnt = 0;
+uint8_t butn_state = 0;
+
 void delay_nop(uint16_t delay_v){
   for(uint16_t del_v = 0; del_v < delay_v; del_v++)asm("nop");
   
@@ -445,9 +453,12 @@ void ft812_init(char *str1, char *str2){
     wReg16(REG_HSIZE, 320);
     wReg16(REG_VSIZE, 240);
     
-    //wReg8(REG_TOUCH_MODE, FT8_TMODE_CONTINUOUS);	/* enable touch */
-    //wReg16(REG_TOUCH_RZTHRESH, 1200); /* eliminate any false touches */
     
+    //wReg16(REG_TOUCH_CONFIG, 0x8381);
+    //wReg8(REG_TOUCH_OVERSAMPLE, 0x0f);
+    //wReg16(REG_TOUCH_CONFIG, 0x05D0);
+    wReg8(REG_TOUCH_MODE, 3);	/* enable touch */
+    wReg16(REG_TOUCH_RZTHRESH, 1200); /* eliminate any false touches */
     //wReg32(RAM_DL + 0, CLEAR_COLOR_RGB(0x00,0x00,0x00));//AFE313  //C5E17A
     //wReg32(RAM_DL + 4, CLEAR(1,1,1));
     //wReg32(RAM_DL + 8, 0x00000000);       
@@ -459,6 +470,14 @@ void ft812_init(char *str1, char *str2){
     wReg8(REG_ROTATE, 0); 
     //Data32 = rReg32(REG_FREQUENCY);
     wReg8(REG_PWM_DUTY, 80);
+    
+ 
+    wReg32(REG_TOUCH_TRANSFORM_A, 0x0000f78b);
+    wReg32(REG_TOUCH_TRANSFORM_B, 0x00000427);
+    wReg32(REG_TOUCH_TRANSFORM_C, 0xfffcedf8);
+    wReg32(REG_TOUCH_TRANSFORM_D, 0xfffffba4);
+    wReg32(REG_TOUCH_TRANSFORM_E, 0x0000f756);
+    wReg32(REG_TOUCH_TRANSFORM_F, 0x0009279e);    
 
   FT8_start_cmd_burst();
   FT8_cmd_dl(CMD_DLSTART);
@@ -485,9 +504,26 @@ void ft812_12ch_disp(){
       
     FT8_start_cmd_burst();
     FT8_cmd_dl(CMD_DLSTART); /* start the display list */
+    
+    
     FT8_cmd_dl(DL_CLEAR_RGB | 0x000000);
     FT8_cmd_dl(DL_CLEAR | CLR_COL | CLR_STN | CLR_TAG); 
+    FT8_cmd_dl(TAG(0));  
     
+    if(butn_state == 0) FT8_cmd_dl(DL_COLOR_RGB | GREY_COLOR);
+    if(butn_state == 1) FT8_cmd_dl(DL_COLOR_RGB | SPEECH_GREEN_COLOR);
+    //FT8_cmd_dl(TAG_MASK(1));
+    //FT8_cmd_dl(TAG(1));
+    
+    FT8_cmd_point(250, 20, 16);
+    
+    
+    FT8_cmd_button(270,2,40,40, 18, 0,"on");
+    
+    //FT8_cmd_dl(TAG_MASK(0));
+    //FT8_cmd_dl(TAG_MASK(0));
+    //FT8_cmd_dl(TAG(0));
+   
     FT8_cmd_dl(DL_COLOR_RGB | GREY_COLOR);
     FT8_cmd_rect(0, 45, 320, 75, 1);
     FT8_cmd_rect(0, 105, 320, 135, 1);
@@ -506,8 +542,9 @@ void ft812_12ch_disp(){
     //vertical lines
     FT8_cmd_line(158,47, 158, 223, 2);
     
-    //header
+    //header  
     FT8_cmd_text(20, 5, 28, 0, "Voltage SRC");//default 159 512-centered
+
     char step_size_string [11];
     sprintf (step_size_string, "step - x%d", step_size);  
     FT8_cmd_text(160,2, 22, 0, step_size_string);
@@ -517,7 +554,10 @@ void ft812_12ch_disp(){
     ch_number = 0;
     if(output_state == 1) FT8_cmd_dl(DL_COLOR_RGB | SPEECH_GREEN_COLOR);
     if(output_state == 0) FT8_cmd_dl(DL_COLOR_RGB | GREY_COLOR);
-    FT8_cmd_point(300, 20, 12);
+    
+    
+
+    
     
     FT8_cmd_dl(DL_COLOR_RGB | BLACK_COLOR);
     for(uint8_t inc = 0; inc < 12; inc++){
@@ -582,6 +622,36 @@ void conv_12ch_data(uint16_t *adc_data){
   
 }
 
+void disp_off_data(){
+  uint16_t volt_pos_temp[6];
+  uint16_t volt_neg_temp[6];
+  
+  volt_neg_temp[0] = temp_voltage_value[0];
+  volt_neg_temp[1] = temp_voltage_value[1];
+  volt_neg_temp[2] = temp_voltage_value[2];
+  volt_neg_temp[3] = temp_voltage_value[3];
+  volt_neg_temp[4] = temp_voltage_value[4];
+  volt_neg_temp[5] = temp_voltage_value[10];
+  
+  volt_pos_temp[0] = temp_voltage_value[5];
+  volt_pos_temp[1] = temp_voltage_value[6];
+  volt_pos_temp[2] = temp_voltage_value[7];
+  volt_pos_temp[3] = temp_voltage_value[8];
+  volt_pos_temp[4] = temp_voltage_value[9];
+  volt_pos_temp[5] = temp_voltage_value[11];
+  
+  for(uint8_t id = 0; id < 6; id++){
+    _current_ch_value[id] = 0;
+    _current_ch_value[id + 6] = 0;
+    _voltage_ch_value[2*id] = (float) 0.004888*volt_pos_temp[id];
+    _voltage_ch_value[2*id + 1] = (float) 0.00111*volt_neg_temp[id];     
+    
+  }
+  
+
+}
+
+
 void disp_8ch_formated(uint16_t *adc_data){
 
   float temp_buf[16];
@@ -630,7 +700,6 @@ int main(void)
   //adc_offset_cal_and_flash_write();
    
   TIM_Cmd(TIM7, ENABLE);
-    
   for(;;)
   {   
     //save current values in flash memory of mcu    
@@ -677,11 +746,67 @@ int main(void)
     }          
       if(delay_c == 0){          
         adc_fetch_data();
-        conv_12ch_data(adc_for_disp); 
+       
+        if(butn_state == 1) conv_12ch_data(adc_for_disp);
+        if(butn_state == 0)disp_off_data();
+           
         ft812_12ch_disp();
+        
+        
+        display_tag = FtGetTouchTag();
+        tag_x = display_tag & 0x0000ffff;
+        tag_y = display_tag>>16;
+        
+        disp_time_cnt++;
+        if(tag_x < 0x8000){
+          if((tag_x > 800) && (tag_y > 800))disp_butn_cnt++;
+          //else disp_butn_cnt = 0;
+        }
+        if(disp_time_cnt > 10){
+          if(disp_butn_cnt > 7){
+            //if(pre_disp_butn_cnt != butn_state)
+            cur_state_dispbutn = 1;
+            if(prev_state_dispbutn != cur_state_dispbutn) butn_state = (0x01&(butn_state + 1));  
+          }
+          else cur_state_dispbutn = 0;
+          
+          prev_state_dispbutn = cur_state_dispbutn;          
+          disp_time_cnt = 0;
+          disp_butn_cnt = 0;
+        }
+        
+        tag = display_tag;
+        //if(FtGetTouchTag()) display_tag++;
+        
+        if(butn_state == 0){
+         dac_spi_custom(0, 0x3f0000); 
+         dac_spi_custom(1, 0x3f0000);
+         dac_spi_custom(2, 0x3f0000);
+          
+        }
+        else{
+          dac_spi_custom(0, (0x310000 |  (temp_voltage_value[0]<<6))); 
+          dac_spi_custom(0, (0x320000 |  (temp_voltage_value[5]<<6)));
+          dac_spi_custom(0, (0x340000 |  (temp_voltage_value[6]<<6)));
+          dac_spi_custom(0, (0x380000 |  (temp_voltage_value[1]<<6)));
+                    
+          dac_spi_custom(1, (0x310000 |  (temp_voltage_value[2]<<6))); 
+          dac_spi_custom(1, (0x320000 |  (temp_voltage_value[7]<<6)));
+          dac_spi_custom(1, (0x340000 |  (temp_voltage_value[8]<<6)));
+          dac_spi_custom(1, (0x380000 |  (temp_voltage_value[3]<<6)));
+
+          dac_spi_custom(2, (0x310000 |  (temp_voltage_value[4]<<6))); 
+          dac_spi_custom(2, (0x320000 |  (temp_voltage_value[9]<<6)));
+          dac_spi_custom(2, (0x340000 |  (temp_voltage_value[11]<<6)));
+          dac_spi_custom(2, (0x380000 |  (temp_voltage_value[10]<<6)));           
+          
+          
+        }
+        
         delay_c = 1000;
       } 
-      if(spi_queue != 0){
+    
+      if((spi_queue != 0) && (butn_state == 1)){
             spi_queue--;
             
             if(spi_cs_buf[spi_tail] == 0) dac_spi_custom(0, (0x310000 |  (spi_data_buf[spi_tail]<<6))); 
@@ -925,18 +1050,23 @@ void TIM7_IRQHandler()
     if((encoder_1_state == 1) && (encoder_1_pstate == 3)){
       if(encoder_1_counter < (MAX_COUNT_DRAIN-step_size)) encoder_1_counter += step_size;
       if(temp_voltage_value[0] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[0] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
-      spi_cs_buf[spi_head++] = 0;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[0];
+          spi_cs_buf[spi_head++] = 0;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_1_state == 2) && (encoder_1_pstate == 3)){
       if(encoder_1_counter > step_size) encoder_1_counter -= step_size;
       if(temp_voltage_value[0] > step_size) temp_voltage_value[0] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[0];//encoder_1_counter;
-      spi_cs_buf[spi_head++] = 0;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[0];
+          spi_cs_buf[spi_head++] = 0;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
+      
     }
     
   }//new state
@@ -952,17 +1082,22 @@ void TIM7_IRQHandler()
     if((encoder_2_state == 1) && (encoder_2_pstate == 3)){
       if(encoder_2_counter < (MAX_COUNT_GATE-step_size)) encoder_2_counter += step_size;
       if(temp_voltage_value[1] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[1] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
-      spi_cs_buf[spi_head++] = 1;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[1];
+          spi_cs_buf[spi_head++] = 1;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_2_state == 2) && (encoder_2_pstate == 3)){
       if(encoder_2_counter > step_size) encoder_2_counter -= step_size;
       if(temp_voltage_value[1] > step_size) temp_voltage_value[1] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[1];//encoder_2_counter;
-      spi_cs_buf[spi_head++] = 1;
-      spi_queue++;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[1];
+          spi_cs_buf[spi_head++] = 1;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
       if(spi_head >= 50) spi_head = 0;      
     }
     
@@ -979,18 +1114,22 @@ void TIM7_IRQHandler()
     if((encoder_3_state == 1) && (encoder_3_pstate == 3)){
       if(encoder_3_counter < (MAX_COUNT_DRAIN-step_size)) encoder_3_counter += step_size;
       if(temp_voltage_value[2] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[2] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
-      spi_cs_buf[spi_head++] = 2;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[2];
+          spi_cs_buf[spi_head++] = 2;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_3_state == 2) && (encoder_3_pstate == 3)){
       if(encoder_3_counter > step_size) encoder_3_counter -= step_size;
       if(temp_voltage_value[2] > step_size) temp_voltage_value[2] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[2];//encoder_3_counter;
-      spi_cs_buf[spi_head++] = 2;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[2];
+          spi_cs_buf[spi_head++] = 2;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }  
     }
     
   }//new state
@@ -1005,18 +1144,22 @@ void TIM7_IRQHandler()
     if((encoder_4_state == 1) && (encoder_4_pstate == 3)){
       if(encoder_4_counter < (MAX_COUNT_GATE-step_size)) encoder_4_counter += step_size;
       if(temp_voltage_value[3] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[3] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
-      spi_cs_buf[spi_head++] = 3;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[3];
+          spi_cs_buf[spi_head++] = 3;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_4_state == 2) && (encoder_4_pstate == 3)){
       if(encoder_4_counter > step_size) encoder_4_counter -= step_size;
       if(temp_voltage_value[3] > step_size) temp_voltage_value[3] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[3];//encoder_4_counter;
-      spi_cs_buf[spi_head++] = 3;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[3];
+          spi_cs_buf[spi_head++] = 3;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }    
     }
     
   }//new state  
@@ -1031,18 +1174,22 @@ void TIM7_IRQHandler()
     if((encoder_5_state == 1) && (encoder_5_pstate == 3)){
       if(encoder_5_counter < (MAX_COUNT_DRAIN-step_size)) encoder_5_counter += step_size;
       if(temp_voltage_value[4] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[4] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
-      spi_cs_buf[spi_head++] = 4;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[4];
+          spi_cs_buf[spi_head++] = 4;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_5_state == 2) && (encoder_5_pstate == 3)){
       if(encoder_5_counter > step_size) encoder_5_counter -= step_size;
       if(temp_voltage_value[4] > step_size) temp_voltage_value[4] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[4];//encoder_5_counter;
-      spi_cs_buf[spi_head++] = 4;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[4];
+          spi_cs_buf[spi_head++] = 4;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }    
     }
     
   }//new state   
@@ -1057,18 +1204,22 @@ void TIM7_IRQHandler()
     if((encoder_6_state == 1) && (encoder_6_pstate == 3)){
       if(encoder_6_counter < (MAX_COUNT_GATE-step_size)) encoder_6_counter += step_size;
       if(temp_voltage_value[5] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[5] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
-      spi_cs_buf[spi_head++] = 5;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[5];
+          spi_cs_buf[spi_head++] = 5;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_6_state == 2) && (encoder_6_pstate == 3)){
       if(encoder_6_counter > step_size) encoder_6_counter -= step_size;
       if(temp_voltage_value[5] > step_size) temp_voltage_value[5] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[5];//encoder_6_counter;
-      spi_cs_buf[spi_head++] = 5;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[5];
+          spi_cs_buf[spi_head++] = 5;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }      
     }
     
   }//new state   
@@ -1083,18 +1234,22 @@ void TIM7_IRQHandler()
     if((encoder_7_state == 1) && (encoder_7_pstate == 3)){
       if(encoder_7_counter < (MAX_COUNT_DRAIN-step_size)) encoder_7_counter += step_size;
       if(temp_voltage_value[6] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[6] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
-      spi_cs_buf[spi_head++] = 6;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[6];
+          spi_cs_buf[spi_head++] = 6;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_7_state == 2) && (encoder_7_pstate == 3)){
       if(encoder_7_counter > step_size) encoder_7_counter -= step_size;
       if(temp_voltage_value[6] > step_size) temp_voltage_value[6] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[6];//encoder_7_counter;
-      spi_cs_buf[spi_head++] = 6;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[6];
+          spi_cs_buf[spi_head++] = 6;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }    
     }
     
   }//new state 
@@ -1109,18 +1264,22 @@ void TIM7_IRQHandler()
     if((encoder_8_state == 1) && (encoder_8_pstate == 3)){
       if(encoder_8_counter < (MAX_COUNT_GATE-step_size)) encoder_8_counter += step_size;
       if(temp_voltage_value[7] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[7] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
-      spi_cs_buf[spi_head++] = 7;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[7];
+          spi_cs_buf[spi_head++] = 7;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_8_state == 2) && (encoder_8_pstate == 3)){
       if(encoder_8_counter > step_size) encoder_8_counter -= step_size;
       if(temp_voltage_value[7] > step_size) temp_voltage_value[7] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[7];//encoder_8_counter;
-      spi_cs_buf[spi_head++] = 7;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[7];
+          spi_cs_buf[spi_head++] = 7;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }     
     }
     
   }//new state 
@@ -1135,18 +1294,22 @@ void TIM7_IRQHandler()
     if((encoder_9_state == 1) && (encoder_9_pstate == 3)){
       if(encoder_9_counter < (MAX_COUNT_DRAIN-step_size)) encoder_9_counter += step_size;
       if(temp_voltage_value[8] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[8] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[8];//encoder_9_counter;
-      spi_cs_buf[spi_head++] = 8;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[8];
+          spi_cs_buf[spi_head++] = 8;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_9_state == 2) && (encoder_9_pstate == 3)){
       if(encoder_9_counter > step_size) encoder_9_counter -= step_size;
       if(temp_voltage_value[8] > step_size) temp_voltage_value[8] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[8];//encoder_9_counter;
-      spi_cs_buf[spi_head++] = 8;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[8];
+          spi_cs_buf[spi_head++] = 8;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }   
     }
   }//new state 
   
@@ -1160,18 +1323,22 @@ void TIM7_IRQHandler()
     if((encoder_10_state == 1) && (encoder_10_pstate == 3)){
       if(encoder_10_counter < (MAX_COUNT_GATE-step_size)) encoder_10_counter += step_size;
       if(temp_voltage_value[9] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[9] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[9];//encoder_8_counter;
-      spi_cs_buf[spi_head++] = 9;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[9];
+          spi_cs_buf[spi_head++] = 9;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_10_state == 2) && (encoder_10_pstate == 3)){
       if(encoder_10_counter > step_size) encoder_10_counter -= step_size;
       if(temp_voltage_value[9] > step_size) temp_voltage_value[9] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[9];//encoder_10_counter;
-      spi_cs_buf[spi_head++] = 9;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[9];
+          spi_cs_buf[spi_head++] = 9;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }     
     }
     
   }//new state 
@@ -1186,18 +1353,22 @@ void TIM7_IRQHandler()
     if((encoder_11_state == 1) && (encoder_11_pstate == 3)){
       if(encoder_11_counter < (MAX_COUNT_DRAIN-step_size)) encoder_11_counter += step_size;
       if(temp_voltage_value[10] < (MAX_COUNT_DRAIN-step_size)) temp_voltage_value[10] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[10];//encoder_10_counter;
-      spi_cs_buf[spi_head++] = 10;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[10];
+          spi_cs_buf[spi_head++] = 10;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_11_state == 2) && (encoder_11_pstate == 3)){
       if(encoder_11_counter > step_size) encoder_11_counter -= step_size;
       if(temp_voltage_value[10] > step_size) temp_voltage_value[10] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[10];//encoder_10_counter;
-      spi_cs_buf[spi_head++] = 10;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[10];
+          spi_cs_buf[spi_head++] = 10;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }    
     }
   }//new state 
   
@@ -1211,18 +1382,22 @@ void TIM7_IRQHandler()
     if((encoder_12_state == 1) && (encoder_12_pstate == 3)){
       if(encoder_12_counter < (MAX_COUNT_GATE-step_size)) encoder_12_counter += step_size;
       if(temp_voltage_value[11] < (MAX_COUNT_GATE-step_size)) temp_voltage_value[11] += step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[11];//encoder_12_counter;
-      spi_cs_buf[spi_head++] = 11;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[11];
+          spi_cs_buf[spi_head++] = 11;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }
     }
     if((encoder_12_state == 2) && (encoder_12_pstate == 3)){
       if(encoder_12_counter > step_size) encoder_12_counter -= step_size;
       if(temp_voltage_value[11] > step_size) temp_voltage_value[11] -= step_size;
-      spi_data_buf[spi_head] = temp_voltage_value[11];//encoder_12_counter;
-      spi_cs_buf[spi_head++] = 11;
-      spi_queue++;
-      if(spi_head >= 50) spi_head = 0;      
+      if(butn_state == 1){
+          spi_data_buf[spi_head] = temp_voltage_value[11];
+          spi_cs_buf[spi_head++] = 11;
+          spi_queue++;
+          if(spi_head >= 50) spi_head = 0;
+      }   
     }
     
   }//new state   
